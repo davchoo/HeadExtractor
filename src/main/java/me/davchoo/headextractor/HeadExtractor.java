@@ -57,7 +57,7 @@ public class HeadExtractor {
     private static Set<String> extractHeads(Path worldPath) throws IOException {
         Set<String> heads = ConcurrentHashMap.newKeySet();
 
-        ExecutorService executor = Executors.newFixedThreadPool(16);
+        ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() - 1);
         List<CompletableFuture<?>> tasks = new ArrayList<>();
 
         for (Path path : gatherMCA(worldPath)) {
