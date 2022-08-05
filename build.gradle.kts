@@ -1,9 +1,16 @@
 plugins {
     id("java")
+    id("application")
+    id("com.github.johnrengelman.shadow") version "7.1.2"
 }
 
 group = "me.davchoo.headextractor"
 version = "1.0-SNAPSHOT"
+
+application {
+    mainClass.set("me.davchoo.headextractor.HeadExtractor")
+}
+
 
 repositories {
     mavenCentral()
