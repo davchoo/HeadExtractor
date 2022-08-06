@@ -129,12 +129,8 @@ public class HeadExtractor {
                 }
 
                 int offset = ((location >> 8) & 0xFFFFFF) * 4096;
-                int length = buffer.getInt(offset);
+                int length = buffer.getInt(offset) - 1;
                 byte compressionType = buffer.get(offset + 4);
-
-                if (offset + length + 5 >= channel.size()) {
-                    length = (int) (channel.size() - offset - 5);
-                }
 
                 byte[] payload = new byte[length];
                 buffer.get(offset + 5, payload);
