@@ -24,12 +24,15 @@
 
 package me.davchoo.headextractor;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.steveice10.opennbt.NBTIO;
 import com.github.steveice10.opennbt.tag.builtin.CompoundTag;
 import com.github.steveice10.opennbt.tag.builtin.ListTag;
 import com.github.steveice10.opennbt.tag.builtin.StringTag;
 import com.github.steveice10.opennbt.tag.builtin.Tag;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -41,11 +44,14 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
 public class HeadExtractor {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     public static void main(String[] args) throws IOException {
         if (args.length != 1) {
             System.out.println("Please specify a world folder.");
@@ -71,6 +77,8 @@ public class HeadExtractor {
         CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0])).join();
         // Shut down the executor service to ensure the threads are killed
         executor.shutdownNow();
+
+        heads.removeIf(Predicate.not(HeadExtractor::validateHead));
 
         return heads;
     }
@@ -141,6 +149,7 @@ public class HeadExtractor {
                 } else if (compressionType == 2) {
                     inputStream = new InflaterInputStream(inputStream);
                 }
+                inputStream = new BufferedInputStream(inputStream);
                 processTag(NBTIO.readTag(inputStream), heads);
             }
         } catch (IOException e) {
@@ -166,6 +175,30 @@ public class HeadExtractor {
                     }
                 }
             }
+        }
+    }
+
+    private static boolean validateHead(String head) {
+        try {
+            JsonNode node = MAPPER.readTree(Base64.getDecoder().decode(head));
+            if (!node.isObject()) {
+                return false;
+            }
+
+            JsonNode textures = node.get("textures");
+            if (textures == null || !textures.isObject()) {
+                return false;
+            }
+
+            JsonNode skin = textures.get("SKIN");
+            if (skin == null || !textures.isObject()) {
+                return false;
+            }
+
+            JsonNode url = skin.get("url");
+            return url != null && url.isTextual();
+        } catch (Exception e) {
+            return false;
         }
     }
 }
