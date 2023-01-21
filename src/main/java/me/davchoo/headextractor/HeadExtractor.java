@@ -32,25 +32,29 @@ import com.github.steveice10.opennbt.tag.builtin.ListTag;
 import com.github.steveice10.opennbt.tag.builtin.StringTag;
 import com.github.steveice10.opennbt.tag.builtin.Tag;
 
-import java.io.BufferedInputStream;
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
 public class HeadExtractor {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    // Adapted from https://stackoverflow.com/a/475217
+    private static final Pattern BASE64_PATTERN = Pattern.compile("\\\\?[\"']((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=))\\\\?[\"']");
 
     public static void main(String[] args) throws IOException {
         if (args.length != 1) {
@@ -72,6 +76,7 @@ public class HeadExtractor {
         for (Path path : gatherPlayerData(worldPath)) {
             tasks.add(CompletableFuture.runAsync(() -> processDAT(path, heads), executor));
         }
+        gatherFromDataPacks(worldPath, heads);
 
         // Wait for all tasks to be complete
         CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0])).join();
@@ -115,6 +120,45 @@ public class HeadExtractor {
         dataPaths.add(levelDataPath);
         dataPaths.removeIf(path -> !Files.isRegularFile(path) || !path.getFileName().toString().endsWith("dat"));
         return dataPaths;
+    }
+
+    private static void gatherFromDataPacks(Path worldPath, Set<String> heads) throws IOException {
+        Path dataPacksPath = worldPath.resolve("datapacks");
+        if (!Files.isDirectory(dataPacksPath)) {
+            return;
+        }
+
+        try (Stream<Path> stream = Files.list(dataPacksPath)) {
+            for (Path dataPackPath : stream.toList()) {
+                if (Files.isDirectory(dataPackPath)) {
+                    processDataPack(dataPackPath, heads);
+                } else if (Files.isRegularFile(dataPackPath) && dataPackPath.getFileName().toString().endsWith("zip")) {
+                    try (FileSystem fileSystem = FileSystems.newFileSystem(dataPackPath, Collections.emptyMap())) {
+                        fileSystem.getRootDirectories()
+                                .forEach(path -> processDataPack(path, heads));
+                    }
+                }
+            }
+        }
+    }
+
+    private static void processDataPack(Path dataPack, Set<String> heads) {
+        try (Stream<Path> stream = Files.walk(dataPack)) {
+            for (Path path : stream.toList()) {
+                if (Files.isRegularFile(path)) {
+                    String filename = path.getFileName().toString();
+                    if (filename.endsWith("json") || filename.endsWith("mcfunction")) {
+                        try {
+                            processString(Files.readString(path), heads);
+                        } catch (IOException e) {
+                            System.err.println("Unable to read " + path + " due to exception: " + e);
+                        }
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Unable to fully process " + dataPack + " due to exception: " + e);
+        }
     }
 
     private static void processDAT(Path datPath, Set<String> heads) {
@@ -174,7 +218,16 @@ public class HeadExtractor {
                         heads.add(valueTag.getValue());
                     }
                 }
+            } else if (tag instanceof StringTag stringTag) {
+                processString(stringTag.getValue(), heads);
             }
+        }
+    }
+
+    private static void processString(String string, Set<String> heads) {
+        Matcher m = BASE64_PATTERN.matcher(string);
+        while (m.find()) {
+            heads.add(m.group(1));
         }
     }
 
