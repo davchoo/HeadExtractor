@@ -43,7 +43,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.Predicate;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -70,20 +70,24 @@ public class HeadExtractor {
         ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() - 1);
         List<CompletableFuture<?>> tasks = new ArrayList<>();
 
+        Consumer<String> headConsumer = head -> {
+            if (validateHead(head)) {
+                heads.add(head);
+            }
+        };
+
         for (Path path : gatherMCA(worldPath)) {
-            tasks.add(CompletableFuture.runAsync(() -> processMCA(path, heads), executor));
+            tasks.add(CompletableFuture.runAsync(() -> processMCA(path, headConsumer), executor));
         }
         for (Path path : gatherPlayerData(worldPath)) {
-            tasks.add(CompletableFuture.runAsync(() -> processDAT(path, heads), executor));
+            tasks.add(CompletableFuture.runAsync(() -> processDAT(path, headConsumer), executor));
         }
-        gatherFromDataPacks(worldPath, heads);
+        gatherFromDataPacks(worldPath, headConsumer);
 
         // Wait for all tasks to be complete
         CompletableFuture.allOf(tasks.toArray(new CompletableFuture[0])).join();
         // Shut down the executor service to ensure the threads are killed
         executor.shutdownNow();
-
-        heads.removeIf(Predicate.not(HeadExtractor::validateHead));
 
         return heads;
     }
@@ -122,7 +126,7 @@ public class HeadExtractor {
         return dataPaths;
     }
 
-    private static void gatherFromDataPacks(Path worldPath, Set<String> heads) throws IOException {
+    private static void gatherFromDataPacks(Path worldPath, Consumer<String> headConsumer) throws IOException {
         Path dataPacksPath = worldPath.resolve("datapacks");
         if (!Files.isDirectory(dataPacksPath)) {
             return;
@@ -131,25 +135,24 @@ public class HeadExtractor {
         try (Stream<Path> stream = Files.list(dataPacksPath)) {
             for (Path dataPackPath : stream.toList()) {
                 if (Files.isDirectory(dataPackPath)) {
-                    processDataPack(dataPackPath, heads);
+                    processDataPack(dataPackPath, headConsumer);
                 } else if (Files.isRegularFile(dataPackPath) && dataPackPath.getFileName().toString().endsWith("zip")) {
                     try (FileSystem fileSystem = FileSystems.newFileSystem(dataPackPath, Collections.emptyMap())) {
-                        fileSystem.getRootDirectories()
-                                .forEach(path -> processDataPack(path, heads));
+                        fileSystem.getRootDirectories().forEach(path -> processDataPack(path, headConsumer));
                     }
                 }
             }
         }
     }
 
-    private static void processDataPack(Path dataPack, Set<String> heads) {
+    private static void processDataPack(Path dataPack, Consumer<String> headConsumer) {
         try (Stream<Path> stream = Files.walk(dataPack)) {
             for (Path path : stream.toList()) {
                 if (Files.isRegularFile(path)) {
                     String filename = path.getFileName().toString();
                     if (filename.endsWith("json") || filename.endsWith("mcfunction")) {
                         try {
-                            processString(Files.readString(path), heads);
+                            processString(Files.readString(path), headConsumer);
                         } catch (IOException e) {
                             System.err.println("Unable to read " + path + " due to exception: " + e);
                         }
@@ -161,15 +164,15 @@ public class HeadExtractor {
         }
     }
 
-    private static void processDAT(Path datPath, Set<String> heads) {
+    private static void processDAT(Path datPath, Consumer<String> headConsumer) {
         try {
-            processTag(NBTIO.readFile(datPath.toFile()), heads);
+            processTag(NBTIO.readFile(datPath.toFile()), headConsumer);
         } catch (IOException e) {
             System.err.println("Unable to fully process " + datPath + " due to exception: " + e);
         }
     }
 
-    private static void processMCA(Path mcaPath, Set<String> heads) {
+    private static void processMCA(Path mcaPath, Consumer<String> headConsumer) {
         try (FileChannel channel = FileChannel.open(mcaPath, StandardOpenOption.READ)) {
             MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
             buffer.order(ByteOrder.BIG_ENDIAN);
@@ -194,40 +197,45 @@ public class HeadExtractor {
                     inputStream = new InflaterInputStream(inputStream);
                 }
                 inputStream = new BufferedInputStream(inputStream);
-                processTag(NBTIO.readTag(inputStream), heads);
+                processTag(NBTIO.readTag(inputStream), headConsumer);
             }
         } catch (IOException e) {
             System.err.println("Unable to fully process " + mcaPath + " due to exception: " + e);
         }
     }
 
-    private static void processTag(Tag rootTag, Set<String> heads) {
+    private static void processTag(Tag rootTag, Consumer<String> headConsumer) {
         Deque<Tag> tags = new ArrayDeque<>();
         tags.add(rootTag);
         while (!tags.isEmpty()) {
             Tag tag = tags.pop();
             if (tag instanceof CompoundTag compoundTag) {
                 tags.addAll(compoundTag.values());
-            } else if (tag instanceof ListTag listTag && listTag.getElementType() == CompoundTag.class) {
+            } else if (tag instanceof ListTag listTag) {
+                Class<?> elementType = listTag.getElementType();
+                if (elementType != StringTag.class && elementType != ListTag.class && elementType != CompoundTag.class) {
+                    // The ListTag can't store player profiles
+                    continue;
+                }
                 if (!listTag.getName().equals("textures")) {
                     listTag.forEach(tags::addLast);
                     continue;
                 }
                 if (listTag.size() != 0 && listTag.get(0) instanceof CompoundTag texture) {
                     if (texture.get("Value") instanceof StringTag valueTag) {
-                        heads.add(valueTag.getValue());
+                        headConsumer.accept(valueTag.getValue());
                     }
                 }
             } else if (tag instanceof StringTag stringTag) {
-                processString(stringTag.getValue(), heads);
+                processString(stringTag.getValue(), headConsumer);
             }
         }
     }
 
-    private static void processString(String string, Set<String> heads) {
+    private static void processString(String string, Consumer<String> headConsumer) {
         Matcher m = BASE64_PATTERN.matcher(string);
         while (m.find()) {
-            heads.add(m.group(1));
+            headConsumer.accept(m.group(1));
         }
     }
 
