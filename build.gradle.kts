@@ -4,22 +4,19 @@ plugins {
     id("com.github.johnrengelman.shadow") version "7.1.2"
 }
 
-group = "me.davchoo.headextractor"
+group = "me.amberichu.headextractor"
 version = "1.0-SNAPSHOT"
 
 application {
-    mainClass.set("me.davchoo.headextractor.HeadExtractor")
+    mainClass.set("me.amberichu.headextractor.HeadExtractor")
 }
 
 
 repositories {
+    maven {
+        url = uri("https://repo.opencollab.dev/main")
+    }
     mavenCentral()
-    maven {
-        url = uri("https://repo.opencollab.dev/maven-snapshots")
-    }
-    maven {
-        url = uri("https://jitpack.io")
-    }
 }
 
 dependencies {
