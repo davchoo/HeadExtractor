@@ -58,7 +58,8 @@ public class HeadExtractor {
 
     public static void main(String[] args) throws IOException {
         if (args.length != 1) {
-            System.out.println("Please specify a world folder.");
+            System.out.println("Please specify one world folder.");
+            System.exit(-1);
         }
         Set<String> heads = extractHeads(Path.of(args[0]));
         heads.forEach(System.out::println);
