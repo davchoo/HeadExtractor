@@ -24,8 +24,11 @@
 
 package me.amberichu.headextractor;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.github.steveice10.opennbt.NBTIO;
 import com.github.steveice10.opennbt.tag.builtin.CompoundTag;
 import com.github.steveice10.opennbt.tag.builtin.ListTag;
@@ -52,6 +55,7 @@ import java.util.zip.InflaterInputStream;
 
 public class HeadExtractor {
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
 
     // Adapted from https://stackoverflow.com/a/475217
     private static final Pattern BASE64_PATTERN = Pattern.compile("\\\\?[\"']((?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=))\\\\?[\"']");
@@ -61,8 +65,19 @@ public class HeadExtractor {
             System.out.println("Please specify one world folder.");
             System.exit(-1);
         }
+
         Set<String> heads = extractHeads(Path.of(args[0]));
-        heads.forEach(System.out::println);
+        YAML_MAPPER.writeValue(new File("custom-skulls.yml"), new SkinHashesConfig(heads));
+    }
+
+    static class SkinHashesConfig {
+        @JsonProperty("skin-hashes")
+        @JsonAlias("skin-hashes")
+        private Set<String> skinHashes = new HashSet<>();
+
+        SkinHashesConfig(Set<String> heads) {
+            this.skinHashes = heads;
+        }
     }
 
     private static Set<String> extractHeads(Path worldPath) throws IOException {
@@ -72,8 +87,9 @@ public class HeadExtractor {
         List<CompletableFuture<?>> tasks = new ArrayList<>();
 
         Consumer<String> headConsumer = head -> {
-            if (validateHead(head)) {
-                heads.add(head);
+            String url = validatedHeadHash(head);
+            if (url != null) {
+                heads.add(url);
             }
         };
 
@@ -178,7 +194,13 @@ public class HeadExtractor {
             MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
             buffer.order(ByteOrder.BIG_ENDIAN);
             for (int i = 0; i < 1024; i++) {
-                int location = buffer.getInt(4 * i);
+                int location;
+                try {
+                    location = buffer.getInt(4 * i);
+                } catch (IndexOutOfBoundsException e) {
+                    // Chunk is empty
+                    continue;
+                }
                 if (location == 0) {
                     // Chunk is not present
                     continue;
@@ -240,27 +262,36 @@ public class HeadExtractor {
         }
     }
 
-    private static boolean validateHead(String head) {
+    private static String validatedHeadHash(String head) {
         try {
             JsonNode node = MAPPER.readTree(Base64.getDecoder().decode(head));
             if (!node.isObject()) {
-                return false;
+                return null;
             }
 
             JsonNode textures = node.get("textures");
             if (textures == null || !textures.isObject()) {
-                return false;
+                return null;
             }
 
             JsonNode skin = textures.get("SKIN");
             if (skin == null || !textures.isObject()) {
-                return false;
+                return null;
             }
 
             JsonNode url = skin.get("url");
-            return url != null && url.isTextual();
+            if (url != null && url.isTextual()) {
+                String hashPattern = "/([a-fA-F0-9]+)$";
+                Pattern pattern = Pattern.compile(hashPattern);
+                Matcher matcher = pattern.matcher(url.asText());
+                if (matcher.find()) {
+                    return matcher.group(1);
+                }
+            }
+            
+            return null;
         } catch (Exception e) {
-            return false;
+            return null;
         }
     }
 }
