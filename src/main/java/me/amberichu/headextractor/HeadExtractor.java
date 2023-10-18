@@ -194,7 +194,13 @@ public class HeadExtractor {
             MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, 0, channel.size());
             buffer.order(ByteOrder.BIG_ENDIAN);
             for (int i = 0; i < 1024; i++) {
-                int location = buffer.getInt(4 * i);
+                int location;
+                try {
+                    location = buffer.getInt(4 * i);
+                } catch (IndexOutOfBoundsException e) {
+                    // Chunk is empty
+                    continue;
+                }
                 if (location == 0) {
                     // Chunk is not present
                     continue;
